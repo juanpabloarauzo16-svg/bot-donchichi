@@ -21,9 +21,6 @@ if (ffmpegPath) {
     process.env.PATH = `${path.dirname(ffmpegPath)};${process.env.PATH || ''}`;
 }
 
-const youtubeCookie = process.env.YOUTUBE_COOKIE || process.env.YT_COOKIE;
-console.log(`YouTube cookie loaded: ${youtubeCookie ? 'yes' : 'no'}`);
-
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -36,10 +33,10 @@ const queues = new Map();
 const commands = [
     new SlashCommandBuilder()
         .setName('play')
-        .setDescription('Reproduce una cancion de YouTube en la cola')
+        .setDescription('Reproduce una cancion de SoundCloud en la cola')
         .addStringOption(option =>
             option.setName('url')
-                .setDescription('Link de YouTube')
+                .setDescription('Link de SoundCloud')
                 .setRequired(true)
         ),
     new SlashCommandBuilder()
@@ -122,15 +119,6 @@ function mapStreamType(type) {
     return StreamType.Arbitrary;
 }
 
-function getSongLabel(url) {
-    try {
-        const id = play.extractID(url);
-        return id ? `YouTube ${id}` : url;
-    } catch {
-        return url;
-    }
-}
-
 async function wait(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -145,7 +133,7 @@ async function getStreamWithRetry(url, attempts = 3) {
             lastError = error;
             const message = String(error?.message || error);
 
-            if (!message.includes('429') && !message.toLowerCase().includes('confirmar que no eres un bot')) {
+            if (!message.includes('429')) {
                 throw error;
             }
 
@@ -153,12 +141,33 @@ async function getStreamWithRetry(url, attempts = 3) {
         }
     }
 
-    const message = String(lastError?.message || lastError || '');
-    if (message.toLowerCase().includes('confirmar que no eres un bot')) {
-        throw new Error('Falta configurar YOUTUBE_COOKIE en Railway o la cookie ya expiro.');
+    throw lastError;
+}
+
+async function resolveSoundCloudSongs(url, requestedBy) {
+    const sourceType = await play.so_validate(url);
+
+    if (sourceType === 'track') {
+        const track = await play.soundcloud(url);
+        return [{
+            title: track.name,
+            url: track.url,
+            duration: track.durationInSec,
+            requestedBy
+        }];
     }
 
-    throw lastError;
+    if (sourceType === 'playlist') {
+        const playlist = await play.soundcloud(url);
+        return playlist.tracks.map(track => ({
+            title: track.name,
+            url: track.url,
+            duration: track.durationInSec,
+            requestedBy
+        }));
+    }
+
+    throw new Error('Pasa un link valido de SoundCloud.');
 }
 
 async function playNext(guildId) {
@@ -191,13 +200,8 @@ async function playNext(guildId) {
 async function addSong(guild, url, requestedBy) {
     const queue = getQueue(guild.id);
 
-    const song = {
-        title: getSongLabel(url),
-        url,
-        requestedBy
-    };
-
-    queue.songs.push(song);
+    const songs = await resolveSoundCloudSongs(url, requestedBy);
+    queue.songs.push(...songs);
 
     if (!queue.connection) {
         queue.connection = await ensureConnection(guild);
@@ -207,20 +211,10 @@ async function addSong(guild, url, requestedBy) {
         await playNext(guild.id);
     }
 
-    return song;
+    return songs;
 }
 
 async function bootstrap() {
-    if (youtubeCookie) {
-        await play.setToken({
-            youtube: {
-                cookie: youtubeCookie
-            }
-        });
-    } else {
-        console.warn('YOUTUBE_COOKIE no esta configurada. YouTube puede bloquear la reproduccion.');
-    }
-
     client.once('ready', async () => {
         console.log(`Bot conectado como ${client.user.tag}`);
 
@@ -284,14 +278,15 @@ client.on('interactionCreate', async interaction => {
     try {
         if (interaction.commandName === 'play') {
             const url = interaction.options.getString('url', true);
-            if (!play.yt_validate(url)) {
-                return interaction.reply({ content: 'Pasa un link valido de YouTube.', ephemeral: true });
-            }
 
             await interaction.deferReply();
-            const song = await addSong(guild, url, interaction.user.tag);
+            const songs = await addSong(guild, url, interaction.user.tag);
 
-            return interaction.editReply(`Agregada: **${song.title}**`);
+            if (songs.length === 1) {
+                return interaction.editReply(`Agregada: **${songs[0].title}**`);
+            }
+
+            return interaction.editReply(`Agregadas **${songs.length}** canciones de la playlist.`);
         }
 
         if (interaction.commandName === 'pause') {
