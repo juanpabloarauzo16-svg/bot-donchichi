@@ -21,19 +21,45 @@ player.on('error', error => {
     console.error('Error en el reproductor de audio:', error);
 });
 
+// Función para parsear cookies en formato Netscape a formato de cabecera HTTP
+function getCookieString(content) {
+    content = content.trim();
+    // Detectar si el archivo está en formato Netscape (comentarios o tabulaciones)
+    if (content.includes('\t') || content.includes('#')) {
+        console.log("Parseando cookies.txt detectado en formato Netscape...");
+        const lines = content.split(/\r?\n/);
+        const cookiePairs = [];
+        for (let line of lines) {
+            line = line.trim();
+            if (!line || line.startsWith('#')) continue;
+            const parts = line.split(/\s+/);
+            if (parts.length >= 7) {
+                const name = parts[5];
+                const value = parts[6];
+                cookiePairs.push(`${name}=${value}`);
+            }
+        }
+        return cookiePairs.join('; ');
+    }
+    // Si ya es una sola línea estándar
+    return content;
+}
+
 // Cargar cookies de YouTube si existen para evitar bloqueo de bots en Railway
 const cookiesPath = path.join(__dirname, 'cookies.txt');
 if (fs.existsSync(cookiesPath)) {
     try {
-        const cookiesContent = fs.readFileSync(cookiesPath, 'utf8');
+        const rawContent = fs.readFileSync(cookiesPath, 'utf8');
+        const parsedCookies = getCookieString(rawContent);
+        
         play.setToken({
             youtube: {
-                cookie: cookiesContent.trim()
+                cookie: parsedCookies
             }
         });
-        console.log("✅ Archivo cookies.txt cargado con éxito para play-dl.");
+        console.log("✅ Archivo cookies.txt cargado y formateado con éxito para play-dl.");
     } catch (err) {
-        console.error("❌ Error al cargar cookies.txt:", err);
+        console.error("❌ Error al cargar/formatear cookies.txt:", err);
     }
 } else {
     console.log("⚠️ No se encontró cookies.txt. Las peticiones a YouTube en Railway podrían fallar con error de bot.");
