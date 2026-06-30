@@ -19,7 +19,7 @@ player.on('error', error => {
     console.error('Error en el reproductor de audio:', error);
 });
 
-// Usar clientReady en lugar de ready para evitar advertencias de deprecación - trigger rebuild
+// Usar clientReady en lugar de ready para evitar advertencias de deprecación
 client.once('clientReady', async () => {
     console.log(`Bot conectado como ${client.user.tag}`);
 
@@ -101,23 +101,33 @@ client.on('interactionCreate', async interaction => {
     const { commandName } = interaction;
 
     if (commandName === 'play') {
-        const query = interaction.options.getString('cancion');
         await interaction.deferReply();
+        const query = interaction.options.getString('cancion');
+        
+        console.log('--- Nueva petición /play ---');
+        console.log('Query recibido:', query);
+        console.log('Todas las opciones recibidas:', JSON.stringify(interaction.options.data, null, 2));
+
+        if (!query || typeof query !== 'string' || query.trim() === '') {
+            return interaction.editReply('❌ Por favor, proporciona un enlace o término de búsqueda válido.');
+        }
 
         try {
             let stream;
             let title = "";
 
+            const cleanQuery = query.trim();
             // Validar de forma asíncrona la consulta usando play.validate
-            const validation = await play.validate(query);
+            const validation = await play.validate(cleanQuery);
+            console.log('Tipo de validación de play-dl:', validation);
 
             if (validation === 'yt_video' || validation === 'yt_playlist') {
-                const videoInfo = await play.video_info(query);
+                const videoInfo = await play.video_info(cleanQuery);
                 title = videoInfo.video_details.title;
                 stream = await play.stream_from_info(videoInfo);
             } else {
                 // Si no es URL válida de YouTube, buscar por término
-                const searchResults = await play.search(query, { limit: 1 });
+                const searchResults = await play.search(cleanQuery, { limit: 1 });
                 if (searchResults.length === 0) {
                     return interaction.editReply('❌ No se encontró ninguna canción con ese nombre.');
                 }
