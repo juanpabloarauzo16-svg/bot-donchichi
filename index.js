@@ -45,6 +45,20 @@ function getCookieString(content) {
     return content;
 }
 
+// Función para expandir URLs cortadas de youtu.be a URLs completas de youtube.com
+function expandYoutubeUrl(url) {
+    url = url.trim();
+    const youtuBeRegex = /(?:https?:\/\/)?(?:www\.)?youtu\.be\/([^?&\s]+)/;
+    const match = url.match(youtuBeRegex);
+    if (match && match[1]) {
+        const videoId = match[1];
+        const expanded = `https://www.youtube.com/watch?v=${videoId}`;
+        console.log(`URL expandida: ${url} -> ${expanded}`);
+        return expanded;
+    }
+    return url;
+}
+
 // Cargar cookies de YouTube si existen para evitar bloqueo de bots en Railway
 const cookiesPath = path.join(__dirname, 'cookies.txt');
 if (fs.existsSync(cookiesPath)) {
@@ -164,7 +178,9 @@ client.on('interactionCreate', async interaction => {
             let stream;
             let title = "";
 
-            const cleanQuery = query.trim();
+            // Expandir URL corta a URL estándar completa para evitar problemas en play-dl
+            const cleanQuery = expandYoutubeUrl(query);
+            
             // Validar de forma asíncrona la consulta usando play.validate
             const validation = await play.validate(cleanQuery);
             console.log('Tipo de validación de play-dl:', validation);
