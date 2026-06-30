@@ -28,18 +28,14 @@ const client = new Client({
 });
 
 const queues = new Map();
-const spotifyTokenState = {
-    accessToken: null,
-    expiresAt: 0
-};
 
 const commands = [
     new SlashCommandBuilder()
         .setName('play')
-        .setDescription('Reproduce musica desde YouTube o Spotify en la cola')
+        .setDescription('Reproduce musica desde YouTube en la cola')
         .addStringOption(option =>
             option.setName('url')
-                .setDescription('Link de YouTube, Spotify o una busqueda')
+                .setDescription('Link de YouTube o una busqueda')
                 .setRequired(true)
         ),
     new SlashCommandBuilder()
@@ -130,21 +126,6 @@ function parseYoutubeUrl(url) {
     return match ? input : null;
 }
 
-function parseSpotifyUrl(url) {
-    const input = String(url || '').trim();
-    const match =
-        input.match(/^https?:\/\/open\.spotify\.com\/(?:[a-z]{2,10}(?:-[a-z]{2,10})*\/)?(track|playlist|album)\/([A-Za-z0-9]+)/i) ||
-        input.match(/^spotify:(track|playlist|album):([A-Za-z0-9]+)/i);
-
-    if (!match) return null;
-
-    return {
-        type: match[1].toLowerCase(),
-        id: match[2],
-        url: input
-    };
-}
-
 async function searchYoutube(query) {
     const results = await play.search(query, {
         limit: 1,
@@ -182,40 +163,6 @@ function normalizeTitle(title) {
     return String(title || '').replace(/\s+/g, ' ').trim();
 }
 
-function trackToSong(track, requestedBy, sourceUrl) {
-    return {
-        title: normalizeTitle(track.title || track.name || 'Cancion'),
-        url: sourceUrl,
-        duration: track.durationInSec || track.duration || track.duration_ms || 0,
-        requestedBy
-    };
-}
-
-async function resolveSpotifyTrack(url, requestedBy) {
-    const parsed = parseSpotifyUrl(url);
-
-    if (!parsed || parsed.type !== 'track') {
-        throw new Error('Pasa un link de Spotify de una cancion.');
-    }
-
-    const response = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(parsed.url)}`);
-
-    if (!response.ok) {
-        throw new Error('No pude leer ese link de Spotify.');
-    }
-
-    const data = await response.json();
-    const title = normalizeTitle(data?.title || 'Cancion de Spotify');
-    const search = await searchYoutube(title);
-
-    return [{
-        title,
-        url: search.url,
-        duration: search.durationInSec || 0,
-        requestedBy
-    }];
-}
-
 async function resolveMusic(url, requestedBy) {
     const youtubeUrl = parseYoutubeUrl(url);
     if (youtubeUrl) {
@@ -226,15 +173,6 @@ async function resolveMusic(url, requestedBy) {
             duration: info?.video_details?.durationInSec || 0,
             requestedBy
         }];
-    }
-
-    const spotify = parseSpotifyUrl(url);
-    if (spotify) {
-        if (spotify.type === 'track') {
-            return resolveSpotifyTrack(url, requestedBy);
-        }
-
-        throw new Error('Por ahora solo acepto links de Spotify de una cancion. Para playlists, usa YouTube o manda una cancion por vez.');
     }
 
     const search = await searchYoutube(url);
