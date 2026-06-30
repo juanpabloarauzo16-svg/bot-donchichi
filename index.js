@@ -204,7 +204,9 @@ async function spotifyApi(pathname) {
     });
 
     if (!response.ok) {
-        throw new Error(`Spotify API fallo (${response.status})`);
+        const details = await response.text().catch(() => '');
+        const suffix = details ? `: ${details.slice(0, 180)}` : '';
+        throw new Error(`Spotify API fallo (${response.status})${suffix}`);
     }
 
     return response.json();
