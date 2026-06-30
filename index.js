@@ -129,7 +129,7 @@ function parseYoutubeUrl(url) {
 async function searchYoutube(query) {
     const results = await play.search(query, {
         limit: 1,
-        source: { youtube: true }
+        source: { youtube: 'video' }
     });
 
     if (!results || results.length === 0) {
