@@ -94,6 +94,10 @@ async function ensureConnection(guild) {
         selfDeaf: false
     });
 
+    connection.on('error', error => {
+        console.error('Error de voz:', error);
+    });
+
     connection.on(VoiceConnectionStatus.Disconnected, async () => {
         try {
             await entersState(connection, VoiceConnectionStatus.Signalling, 5_000);
