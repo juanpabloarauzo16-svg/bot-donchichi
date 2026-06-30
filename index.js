@@ -121,6 +121,40 @@ function mapStreamType(type) {
     return StreamType.Arbitrary;
 }
 
+function getSongLabel(url) {
+    try {
+        const id = play.extractID(url);
+        return id ? `YouTube ${id}` : url;
+    } catch {
+        return url;
+    }
+}
+
+async function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function getStreamWithRetry(url, attempts = 3) {
+    let lastError;
+
+    for (let i = 0; i < attempts; i++) {
+        try {
+            return await play.stream(url, { discordPlayerCompatibility: true });
+        } catch (error) {
+            lastError = error;
+            const message = String(error?.message || error);
+
+            if (!message.includes('429') && !message.toLowerCase().includes('confirmar que no eres un bot')) {
+                throw error;
+            }
+
+            await wait(1500 * (i + 1));
+        }
+    }
+
+    throw lastError;
+}
+
 async function playNext(guildId) {
     const queue = getQueue(guildId);
     const song = queue.songs[0];
@@ -131,7 +165,7 @@ async function playNext(guildId) {
     }
 
     try {
-        const stream = await play.stream(song.url, { discordPlayerCompatibility: true });
+        const stream = await getStreamWithRetry(song.url);
         const resource = createAudioResource(stream.stream, {
             inputType: mapStreamType(stream.type),
             metadata: song
@@ -150,12 +184,10 @@ async function playNext(guildId) {
 
 async function addSong(guild, url, requestedBy) {
     const queue = getQueue(guild.id);
-    const info = await play.video_basic_info(url, youtubeCookie ? { htmldata: false } : undefined);
 
     const song = {
-        title: info.video_details.title,
-        url: info.video_details.url,
-        duration: info.video_details.durationInSec,
+        title: getSongLabel(url),
+        url,
         requestedBy
     };
 
@@ -251,7 +283,7 @@ client.on('interactionCreate', async interaction => {
             await interaction.deferReply();
             const song = await addSong(guild, url, interaction.user.tag);
 
-            return interaction.editReply(`Agregada: **${song.title}** \`${formatDuration(song.duration)}\``);
+            return interaction.editReply(`Agregada: **${song.title}**`);
         }
 
         if (interaction.commandName === 'pause') {
