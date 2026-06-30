@@ -149,7 +149,17 @@ async function searchYoutube(query) {
         throw new Error('No encontre una cancion en YouTube para ese enlace.');
     }
 
-    return results[0];
+    const result = results[0];
+    const url = result?.url || result?.link || (result?.id ? `https://www.youtube.com/watch?v=${result.id}` : null);
+
+    if (!url) {
+        throw new Error('No pude obtener la URL de esa cancion.');
+    }
+
+    return {
+        ...result,
+        url
+    };
 }
 
 async function getStreamWithRetry(url, attempts = 3) {
