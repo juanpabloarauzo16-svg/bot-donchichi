@@ -120,6 +120,19 @@ async function wait(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function configurePlayDl() {
+    const youtubeCookie = process.env.YOUTUBE_COOKIE;
+
+    if (youtubeCookie) {
+        await play.setToken({
+            youtube: {
+                cookie: youtubeCookie
+            }
+        });
+        console.log('Cookie de YouTube cargada.');
+    }
+}
+
 function parseYoutubeUrl(url) {
     const input = String(url || '').trim();
     const match = input.match(/^https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be|music\.youtube\.com)\/.+/i);
@@ -229,6 +242,8 @@ async function addSong(guild, url, requestedBy) {
 }
 
 async function bootstrap() {
+    await configurePlayDl();
+
     client.once('clientReady', async () => {
         console.log(`Bot conectado como ${client.user.tag}`);
 
