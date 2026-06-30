@@ -330,11 +330,13 @@ client.on('interactionCreate', async interaction => {
         }
     } catch (error) {
         console.error(error);
+        const details = String(error?.message || error).slice(0, 180);
+
         if (interaction.deferred || interaction.replied) {
-            return interaction.editReply('No pude reproducir esa cancion. Mira los logs.');
+            return interaction.editReply(`No pude reproducir esa cancion: ${details}`);
         }
 
-        return interaction.reply({ content: 'No pude reproducir esa cancion. Mira los logs.', ephemeral: true });
+        return interaction.reply({ content: `No pude reproducir esa cancion: ${details}`, ephemeral: true });
     }
 });
 
