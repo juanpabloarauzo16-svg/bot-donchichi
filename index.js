@@ -102,7 +102,9 @@ client.on('interactionCreate', async interaction => {
 
     if (commandName === 'play') {
         await interaction.deferReply();
-        const query = interaction.options.getString('cancion');
+        
+        // Obtener el query usando tanto 'cancion' como 'query' por si Discord tiene en caché comandos antiguos
+        const query = interaction.options.getString('cancion') || interaction.options.getString('query');
         
         console.log('--- Nueva petición /play ---');
         console.log('Query recibido:', query);
