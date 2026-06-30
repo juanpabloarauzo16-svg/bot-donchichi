@@ -33,10 +33,10 @@ const queues = new Map();
 const commands = [
     new SlashCommandBuilder()
         .setName('play')
-        .setDescription('Reproduce una cancion de SoundCloud en la cola')
+        .setDescription('Reproduce una cancion de Spotify o SoundCloud en la cola')
         .addStringOption(option =>
             option.setName('url')
-                .setDescription('Link de SoundCloud')
+                .setDescription('Link de Spotify o SoundCloud')
                 .setRequired(true)
         ),
     new SlashCommandBuilder()
@@ -144,30 +144,82 @@ async function getStreamWithRetry(url, attempts = 3) {
     throw lastError;
 }
 
+function buildArtistString(artists) {
+    return (artists || [])
+        .map(artist => artist?.name)
+        .filter(Boolean)
+        .join(' ');
+}
+
+function buildQueryFromTrack(track) {
+    return [track?.name, buildArtistString(track?.artists)]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+}
+
+function trackToSong(track, requestedBy) {
+    return {
+        title: track.name,
+        url: track.url,
+        duration: track.durationInSec || 0,
+        requestedBy
+    };
+}
+
+async function searchSoundCloudTrack(query, requestedBy) {
+    const results = await play.search(query, { source: { soundcloud: 'tracks' }, limit: 1 });
+    const track = results?.[0];
+
+    if (!track) {
+        throw new Error(`No encontre una coincidencia en SoundCloud para: ${query}`);
+    }
+
+    return trackToSong(track, requestedBy);
+}
+
 async function resolveSoundCloudSongs(url, requestedBy) {
-    const sourceType = await play.so_validate(url);
+    const sourceType = await play.validate(url);
 
-    if (sourceType === 'track') {
+    if (sourceType === 'so_track') {
         const track = await play.soundcloud(url);
-        return [{
-            title: track.name,
-            url: track.url,
-            duration: track.durationInSec,
-            requestedBy
-        }];
+        return [trackToSong(track, requestedBy)];
     }
 
-    if (sourceType === 'playlist') {
+    if (sourceType === 'so_playlist') {
         const playlist = await play.soundcloud(url);
-        return playlist.tracks.map(track => ({
-            title: track.name,
-            url: track.url,
-            duration: track.durationInSec,
-            requestedBy
-        }));
+        return playlist.tracks.map(track => trackToSong(track, requestedBy));
     }
 
-    throw new Error('Pasa un link valido de SoundCloud.');
+    if (sourceType === 'sp_track') {
+        const track = await play.spotify(url);
+        return [await searchSoundCloudTrack(buildQueryFromTrack(track), requestedBy)];
+    }
+
+    if (sourceType === 'sp_playlist' || sourceType === 'sp_album') {
+        const collection = await play.spotify(url);
+        const tracks = collection.tracks || [];
+        const songs = [];
+
+        for (const track of tracks.slice(0, 50)) {
+            const query = buildQueryFromTrack(track);
+            if (!query) continue;
+
+            try {
+                songs.push(await searchSoundCloudTrack(query, requestedBy));
+            } catch (error) {
+                console.warn(`No encontre coincidencia para "${query}":`, error.message);
+            }
+        }
+
+        if (songs.length === 0) {
+            throw new Error('No pude convertir ese Spotify a una cancion reproducible.');
+        }
+
+        return songs;
+    }
+
+    throw new Error('Pasa un link valido de Spotify o SoundCloud.');
 }
 
 async function playNext(guildId) {
