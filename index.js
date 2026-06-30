@@ -32,10 +32,10 @@ const queues = new Map();
 const commands = [
     new SlashCommandBuilder()
         .setName('play')
-        .setDescription('Reproduce musica desde YouTube en la cola')
+        .setDescription('Busca y reproduce musica por nombre')
         .addStringOption(option =>
-            option.setName('url')
-                .setDescription('Link de YouTube o una busqueda')
+            option.setName('query')
+                .setDescription('Nombre de la cancion o link de YouTube')
                 .setRequired(true)
         ),
     new SlashCommandBuilder()
@@ -291,10 +291,10 @@ client.on('interactionCreate', async interaction => {
 
     try {
         if (interaction.commandName === 'play') {
-            const url = interaction.options.getString('url', true);
+            const query = interaction.options.getString('query', true);
 
             await interaction.deferReply();
-            const songs = await addSong(guild, url, interaction.user.tag);
+            const songs = await addSong(guild, query, interaction.user.tag);
 
             return interaction.editReply(`Agregada: **${songs[0].title}**${songs[0].duration ? ` (${formatDuration(songs[0].duration)})` : ''}`);
         }
