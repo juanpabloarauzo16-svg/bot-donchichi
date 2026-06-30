@@ -215,6 +215,14 @@ async function addSong(guild, url, requestedBy) {
 }
 
 async function bootstrap() {
+    const soundcloudClientId = process.env.SC_CLIENT_ID || process.env.SOUNDCLOUD_CLIENT_ID || await play.getFreeClientID();
+
+    await play.setToken({
+        soundcloud: {
+            client_id: soundcloudClientId
+        }
+    });
+
     client.once('ready', async () => {
         console.log(`Bot conectado como ${client.user.tag}`);
 
