@@ -19,7 +19,7 @@ player.on('error', error => {
     console.error('Error en el reproductor de audio:', error);
 });
 
-// Usar clientReady en lugar de ready para evitar advertencias de deprecación
+// Usar clientReady en lugar de ready para evitar advertencias de deprecación - trigger rebuild
 client.once('clientReady', async () => {
     console.log(`Bot conectado como ${client.user.tag}`);
 
