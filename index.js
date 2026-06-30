@@ -21,6 +21,8 @@ if (ffmpegPath) {
     process.env.PATH = `${path.dirname(ffmpegPath)};${process.env.PATH || ''}`;
 }
 
+const youtubeCookie = process.env.YOUTUBE_COOKIE || process.env.YT_COOKIE;
+
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -148,7 +150,7 @@ async function playNext(guildId) {
 
 async function addSong(guild, url, requestedBy) {
     const queue = getQueue(guild.id);
-    const info = await play.video_basic_info(url);
+    const info = await play.video_basic_info(url, youtubeCookie ? { htmldata: false } : undefined);
 
     const song = {
         title: info.video_details.title,
@@ -170,48 +172,60 @@ async function addSong(guild, url, requestedBy) {
     return song;
 }
 
-client.once('ready', async () => {
-    console.log(`Bot conectado como ${client.user.tag}`);
-
-    const guild = await client.guilds.fetch(process.env.GUILD_ID).catch(() => null);
-
-    if (!guild) return console.log('Servidor no encontrado');
-
-    const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
-
-    await rest.put(Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID), { body: commands });
-
-    try {
-        const connection = await ensureConnection(guild);
-        const queue = getQueue(guild.id);
-
-        queue.connection = connection;
-        connection.subscribe(queue.player);
-
-        queue.player.on(AudioPlayerStatus.Idle, async () => {
-            const current = queue.songs.shift();
-            if (current) {
-                console.log(`Termino: ${current.title}`);
-            }
-
-            if (queue.songs.length > 0) {
-                await playNext(guild.id).catch(error => console.error(error));
-            } else {
-                queue.playing = false;
+async function bootstrap() {
+    if (youtubeCookie) {
+        await play.setToken({
+            youtube: {
+                cookie: youtubeCookie
             }
         });
-
-        queue.player.on('error', error => {
-            console.error('Error del reproductor:', error);
-            queue.songs.shift();
-            playNext(guild.id).catch(err => console.error(err));
-        });
-
-        console.log('Conectado al canal de voz');
-    } catch (error) {
-        console.log(error.message);
     }
-});
+
+    client.once('ready', async () => {
+        console.log(`Bot conectado como ${client.user.tag}`);
+
+        const guild = await client.guilds.fetch(process.env.GUILD_ID).catch(() => null);
+
+        if (!guild) return console.log('Servidor no encontrado');
+
+        const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
+
+        await rest.put(Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID), { body: commands });
+
+        try {
+            const connection = await ensureConnection(guild);
+            const queue = getQueue(guild.id);
+
+            queue.connection = connection;
+            connection.subscribe(queue.player);
+
+            queue.player.on(AudioPlayerStatus.Idle, async () => {
+                const current = queue.songs.shift();
+                if (current) {
+                    console.log(`Termino: ${current.title}`);
+                }
+
+                if (queue.songs.length > 0) {
+                    await playNext(guild.id).catch(error => console.error(error));
+                } else {
+                    queue.playing = false;
+                }
+            });
+
+            queue.player.on('error', error => {
+                console.error('Error del reproductor:', error);
+                queue.songs.shift();
+                playNext(guild.id).catch(err => console.error(err));
+            });
+
+            console.log('Conectado al canal de voz');
+        } catch (error) {
+            console.log(error.message);
+        }
+    });
+
+    client.login(process.env.TOKEN);
+}
 
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
@@ -292,4 +306,7 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
-client.login(process.env.TOKEN);
+bootstrap().catch(error => {
+    console.error('Error al iniciar el bot:', error);
+    process.exitCode = 1;
+});
