@@ -2,7 +2,6 @@ const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require
 const {
     AudioPlayerStatus,
     NoSubscriberBehavior,
-    StreamType,
     VoiceConnectionStatus,
     createAudioPlayer,
     createAudioResource,
@@ -37,10 +36,10 @@ const spotifyTokenState = {
 const commands = [
     new SlashCommandBuilder()
         .setName('play')
-        .setDescription('Reproduce una cancion de Spotify en la cola')
+        .setDescription('Reproduce musica desde YouTube o Spotify en la cola')
         .addStringOption(option =>
             option.setName('url')
-                .setDescription('Link de Spotify')
+                .setDescription('Link de YouTube, Spotify o una busqueda')
                 .setRequired(true)
         ),
     new SlashCommandBuilder()
@@ -121,32 +120,14 @@ function formatDuration(seconds) {
         .join(':');
 }
 
-function mapStreamType(type) {
-    if (type === StreamType.Opus || type === 'opus') return StreamType.Opus;
-    if (type === StreamType.OggOpus || type === 'ogg/opus') return StreamType.OggOpus;
-    return StreamType.Arbitrary;
-}
-
 async function wait(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function getStreamWithRetry(url, attempts = 3) {
-    for (let i = 0; i < attempts; i++) {
-        try {
-            return { stream: url, type: StreamType.Arbitrary };
-        } catch (error) {
-            const message = String(error?.message || error);
-
-            if (!message.includes('429')) {
-                throw error;
-            }
-
-            await wait(1500 * (i + 1));
-        }
-    }
-
-    throw new Error('No pude preparar el audio de Spotify.');
+function parseYoutubeUrl(url) {
+    const input = String(url || '').trim();
+    const match = input.match(/^https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be|music\.youtube\.com)\/.+/i);
+    return match ? input : null;
 }
 
 function parseSpotifyUrl(url) {
@@ -159,147 +140,110 @@ function parseSpotifyUrl(url) {
 
     return {
         type: match[1].toLowerCase(),
-        id: match[2]
+        id: match[2],
+        url: input
     };
 }
 
-async function getSpotifyAccessToken() {
-    const clientId = process.env.SPOTIFY_CLIENT_ID;
-    const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
-
-    if (!clientId || !clientSecret) {
-        throw new Error('Faltan SPOTIFY_CLIENT_ID o SPOTIFY_CLIENT_SECRET en Railway.');
-    }
-
-    if (spotifyTokenState.accessToken && Date.now() < spotifyTokenState.expiresAt) {
-        return spotifyTokenState.accessToken;
-    }
-
-    const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-    const response = await fetch('https://accounts.spotify.com/api/token', {
-        method: 'POST',
-        headers: {
-            Authorization: `Basic ${auth}`,
-            'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        body: new URLSearchParams({ grant_type: 'client_credentials' })
+async function searchYoutube(query) {
+    const results = await play.search(query, {
+        limit: 1,
+        source: { youtube: true }
     });
 
-    if (!response.ok) {
-        throw new Error(`No pude autenticar Spotify (${response.status})`);
+    if (!results || results.length === 0) {
+        throw new Error('No encontre una cancion en YouTube para ese enlace.');
     }
 
-    const data = await response.json();
-    spotifyTokenState.accessToken = data.access_token;
-    spotifyTokenState.expiresAt = Date.now() + Math.max(60, (data.expires_in || 3600) - 60) * 1000;
-    return spotifyTokenState.accessToken;
+    return results[0];
 }
 
-async function spotifyApi(pathname) {
-    const token = await getSpotifyAccessToken();
-    const response = await fetch(`https://api.spotify.com/v1${pathname}`, {
-        headers: {
-            Authorization: `Bearer ${token}`
+async function getStreamWithRetry(url, attempts = 3) {
+    for (let i = 0; i < attempts; i++) {
+        try {
+            return await play.stream(url, {
+                discordPlayerCompatibility: true
+            });
+        } catch (error) {
+            const message = String(error?.message || error);
+
+            if (!message.includes('429')) {
+                throw error;
+            }
+
+            await wait(1500 * (i + 1));
         }
-    });
-
-    if (!response.ok) {
-        const details = await response.text().catch(() => '');
-        const suffix = details ? `: ${details.slice(0, 180)}` : '';
-        throw new Error(`Spotify API fallo (${response.status})${suffix}`);
     }
 
-    return response.json();
+    throw new Error('No pude preparar el audio.');
 }
 
-function buildArtists(track) {
-    return (track.artists || []).map(artist => artist.name).filter(Boolean).join(', ');
+function normalizeTitle(title) {
+    return String(title || '').replace(/\s+/g, ' ').trim();
 }
 
-function formatDurationMs(ms) {
-    const totalSeconds = Math.max(0, Math.floor((ms || 0) / 1000));
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = String(totalSeconds % 60).padStart(2, '0');
-    return `${minutes}:${seconds}`;
-}
-
-function trackToSong(track, requestedBy) {
-    const previewUrl = track.preview_url || track.previewURL || null;
-
+function trackToSong(track, requestedBy, sourceUrl) {
     return {
-        title: `${track.name}${buildArtists(track) ? ` - ${buildArtists(track)}` : ''}`,
-        url: previewUrl,
-        previewUrl,
-        duration: track.duration_ms || 30000,
+        title: normalizeTitle(track.title || track.name || 'Cancion'),
+        url: sourceUrl,
+        duration: track.durationInSec || track.duration || track.duration_ms || 0,
         requestedBy
     };
 }
 
-async function resolveSpotifySongs(url, requestedBy) {
+async function resolveSpotifyTrack(url, requestedBy) {
     const parsed = parseSpotifyUrl(url);
 
-    if (!parsed) {
-        throw new Error('Pasa un link valido de Spotify.');
+    if (!parsed || parsed.type !== 'track') {
+        throw new Error('Pasa un link de Spotify de una cancion.');
     }
 
-    if (parsed.type === 'track') {
-        const track = await spotifyApi(`/tracks/${parsed.id}`);
+    const response = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(parsed.url)}`);
 
-        if (!track.preview_url) {
-            throw new Error('Ese track de Spotify no tiene preview y no se puede reproducir.');
-        }
-
-        return [trackToSong(track, requestedBy)];
+    if (!response.ok) {
+        throw new Error('No pude leer ese link de Spotify.');
     }
 
-    if (parsed.type === 'playlist') {
-        const songs = [];
-        let offset = 0;
+    const data = await response.json();
+    const title = normalizeTitle(data?.title || 'Cancion de Spotify');
+    const search = await searchYoutube(title);
 
-        while (true) {
-            const data = await spotifyApi(`/playlists/${parsed.id}/tracks?limit=100&offset=${offset}`);
+    return [{
+        title,
+        url: search.url,
+        duration: search.durationInSec || 0,
+        requestedBy
+    }];
+}
 
-            for (const item of data.items || []) {
-                const track = item?.track;
-                if (!track || !track.preview_url) continue;
-                songs.push(trackToSong(track, requestedBy));
-            }
-
-            if (!data.next) break;
-            offset += data.items?.length || 0;
-        }
-
-        if (!songs.length) {
-            throw new Error('Esa playlist no tiene previews reproducibles.');
-        }
-
-        return songs;
+async function resolveMusic(url, requestedBy) {
+    const youtubeUrl = parseYoutubeUrl(url);
+    if (youtubeUrl) {
+        const info = await play.video_basic_info(youtubeUrl);
+        return [{
+            title: normalizeTitle(info?.video_details?.title || 'Cancion de YouTube'),
+            url: youtubeUrl,
+            duration: info?.video_details?.durationInSec || 0,
+            requestedBy
+        }];
     }
 
-    if (parsed.type === 'album') {
-        const songs = [];
-        let offset = 0;
-
-        while (true) {
-            const data = await spotifyApi(`/albums/${parsed.id}/tracks?limit=50&offset=${offset}`);
-
-            for (const track of data.items || []) {
-                if (!track.preview_url) continue;
-                songs.push(trackToSong(track, requestedBy));
-            }
-
-            if (!data.next) break;
-            offset += data.items?.length || 0;
+    const spotify = parseSpotifyUrl(url);
+    if (spotify) {
+        if (spotify.type === 'track') {
+            return resolveSpotifyTrack(url, requestedBy);
         }
 
-        if (!songs.length) {
-            throw new Error('Ese album no tiene previews reproducibles.');
-        }
-
-        return songs;
+        throw new Error('Por ahora solo acepto links de Spotify de una cancion. Para playlists, usa YouTube o manda una cancion por vez.');
     }
 
-    throw new Error('Pasa un link valido de Spotify.');
+    const search = await searchYoutube(url);
+    return [{
+        title: normalizeTitle(search.title || 'Cancion encontrada'),
+        url: search.url,
+        duration: search.durationInSec || 0,
+        requestedBy
+    }];
 }
 
 async function playNext(guildId) {
@@ -314,7 +258,7 @@ async function playNext(guildId) {
     try {
         const stream = await getStreamWithRetry(song.url);
         const resource = createAudioResource(stream.stream, {
-            inputType: mapStreamType(stream.type),
+            inputType: stream.type,
             metadata: song
         });
 
@@ -332,7 +276,7 @@ async function playNext(guildId) {
 async function addSong(guild, url, requestedBy) {
     const queue = getQueue(guild.id);
 
-    const songs = await resolveSpotifySongs(url, requestedBy);
+    const songs = await resolveMusic(url, requestedBy);
     queue.songs.push(...songs);
 
     if (!queue.connection) {
@@ -414,11 +358,7 @@ client.on('interactionCreate', async interaction => {
             await interaction.deferReply();
             const songs = await addSong(guild, url, interaction.user.tag);
 
-            if (songs.length === 1) {
-                return interaction.editReply(`Agregada: **${songs[0].title}** (${formatDurationMs(songs[0].duration)} preview)`);
-            }
-
-            return interaction.editReply(`Agregadas **${songs.length}** canciones de Spotify con preview.`);
+            return interaction.editReply(`Agregada: **${songs[0].title}**${songs[0].duration ? ` (${formatDuration(songs[0].duration)})` : ''}`);
         }
 
         if (interaction.commandName === 'pause') {
