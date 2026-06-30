@@ -170,9 +170,14 @@ client.on('interactionCreate', async interaction => {
             console.log('Tipo de validación de play-dl:', validation);
 
             if (validation === 'yt_video' || validation === 'yt_playlist') {
-                const videoInfo = await play.video_info(cleanQuery);
-                title = videoInfo.video_details.title;
-                stream = await play.stream_from_info(videoInfo);
+                // Obtener el stream directamente usando play.stream (más estable)
+                stream = await play.stream(cleanQuery);
+                try {
+                    const videoInfo = await play.video_info(cleanQuery);
+                    title = videoInfo.video_details.title;
+                } catch (e) {
+                    title = "Música de YouTube";
+                }
             } else {
                 // Si no es URL válida de YouTube, buscar por término
                 const searchResults = await play.search(cleanQuery, { limit: 1 });
