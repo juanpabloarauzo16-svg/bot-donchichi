@@ -10,8 +10,16 @@ const {
     getVoiceConnection,
     joinVoiceChannel
 } = require('@discordjs/voice');
+const path = require('node:path');
 const play = require('play-dl');
 require('dotenv').config();
+
+const ffmpegPath = require('ffmpeg-static');
+
+if (ffmpegPath) {
+    process.env.FFMPEG_PATH = ffmpegPath;
+    process.env.PATH = `${path.dirname(ffmpegPath)};${process.env.PATH || ''}`;
+}
 
 const client = new Client({
     intents: [
@@ -105,6 +113,12 @@ function formatDuration(seconds) {
         .join(':');
 }
 
+function mapStreamType(type) {
+    if (type === StreamType.Opus || type === 'opus') return StreamType.Opus;
+    if (type === StreamType.OggOpus || type === 'ogg/opus') return StreamType.OggOpus;
+    return StreamType.Arbitrary;
+}
+
 async function playNext(guildId) {
     const queue = getQueue(guildId);
     const song = queue.songs[0];
@@ -114,15 +128,22 @@ async function playNext(guildId) {
         return;
     }
 
-    const stream = await play.stream(song.url);
-    const resource = createAudioResource(stream.stream, {
-        inputType: stream.type === 'opus' ? StreamType.Opus : stream.type,
-        metadata: song
-    });
+    try {
+        const stream = await play.stream(song.url, { discordPlayerCompatibility: true });
+        const resource = createAudioResource(stream.stream, {
+            inputType: mapStreamType(stream.type),
+            metadata: song
+        });
 
-    queue.player.play(resource);
-    queue.playing = true;
-    queue.connection.subscribe(queue.player);
+        queue.player.play(resource);
+        queue.playing = true;
+        queue.connection.subscribe(queue.player);
+    } catch (error) {
+        console.error('Error creando el stream:', error);
+        queue.songs.shift();
+        queue.playing = false;
+        throw error;
+    }
 }
 
 async function addSong(guild, url, requestedBy) {
@@ -264,10 +285,10 @@ client.on('interactionCreate', async interaction => {
     } catch (error) {
         console.error(error);
         if (interaction.deferred || interaction.replied) {
-            return interaction.editReply('Ocurrio un error reproduciendo la musica.');
+            return interaction.editReply('No pude reproducir esa cancion. Mira los logs.');
         }
 
-        return interaction.reply({ content: 'Ocurrio un error reproduciendo la musica.', ephemeral: true });
+        return interaction.reply({ content: 'No pude reproducir esa cancion. Mira los logs.', ephemeral: true });
     }
 });
 
