@@ -148,7 +148,7 @@ async function getStreamWithRetry(url, attempts = 3) {
 function parseSpotifyUrl(url) {
     const input = String(url || '').trim();
     const match =
-        input.match(/^https?:\/\/open\.spotify\.com\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(track|playlist|album)\/([A-Za-z0-9]+)/i) ||
+        input.match(/^https?:\/\/open\.spotify\.com\/(?:[a-z]{2,10}(?:-[a-z]{2,10})*\/)?(track|playlist|album)\/([A-Za-z0-9]+)/i) ||
         input.match(/^spotify:(track|playlist|album):([A-Za-z0-9]+)/i);
 
     if (!match) return null;
