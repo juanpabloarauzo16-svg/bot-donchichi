@@ -29,14 +29,18 @@ const client = new Client({
 });
 
 const queues = new Map();
+const spotifyTokenState = {
+    accessToken: null,
+    expiresAt: 0
+};
 
 const commands = [
     new SlashCommandBuilder()
         .setName('play')
-        .setDescription('Reproduce una cancion de Spotify o SoundCloud en la cola')
+        .setDescription('Reproduce una cancion de Spotify en la cola')
         .addStringOption(option =>
             option.setName('url')
-                .setDescription('Link de Spotify o SoundCloud')
+                .setDescription('Link de Spotify')
                 .setRequired(true)
         ),
     new SlashCommandBuilder()
@@ -124,13 +128,10 @@ async function wait(ms) {
 }
 
 async function getStreamWithRetry(url, attempts = 3) {
-    let lastError;
-
     for (let i = 0; i < attempts; i++) {
         try {
-            return await play.stream(url, { discordPlayerCompatibility: true });
+            return { stream: url, type: StreamType.Arbitrary };
         } catch (error) {
-            lastError = error;
             const message = String(error?.message || error);
 
             if (!message.includes('429')) {
@@ -141,85 +142,158 @@ async function getStreamWithRetry(url, attempts = 3) {
         }
     }
 
-    throw lastError;
+    throw new Error('No pude preparar el audio de Spotify.');
 }
 
-function buildArtistString(artists) {
-    return (artists || [])
-        .map(artist => artist?.name)
-        .filter(Boolean)
-        .join(' ');
+function parseSpotifyUrl(url) {
+    const input = String(url || '').trim();
+    const match =
+        input.match(/^https?:\/\/open\.spotify\.com\/(track|playlist|album)\/([A-Za-z0-9]+)/i) ||
+        input.match(/^spotify:(track|playlist|album):([A-Za-z0-9]+)/i);
+
+    if (!match) return null;
+
+    return {
+        type: match[1].toLowerCase(),
+        id: match[2]
+    };
 }
 
-function buildQueryFromTrack(track) {
-    return [track?.name, buildArtistString(track?.artists)]
-        .filter(Boolean)
-        .join(' ')
-        .trim();
+async function getSpotifyAccessToken() {
+    const clientId = process.env.SPOTIFY_CLIENT_ID;
+    const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+        throw new Error('Faltan SPOTIFY_CLIENT_ID o SPOTIFY_CLIENT_SECRET en Railway.');
+    }
+
+    if (spotifyTokenState.accessToken && Date.now() < spotifyTokenState.expiresAt) {
+        return spotifyTokenState.accessToken;
+    }
+
+    const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+    const response = await fetch('https://accounts.spotify.com/api/token', {
+        method: 'POST',
+        headers: {
+            Authorization: `Basic ${auth}`,
+            'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: new URLSearchParams({ grant_type: 'client_credentials' })
+    });
+
+    if (!response.ok) {
+        throw new Error(`No pude autenticar Spotify (${response.status})`);
+    }
+
+    const data = await response.json();
+    spotifyTokenState.accessToken = data.access_token;
+    spotifyTokenState.expiresAt = Date.now() + Math.max(60, (data.expires_in || 3600) - 60) * 1000;
+    return spotifyTokenState.accessToken;
+}
+
+async function spotifyApi(pathname) {
+    const token = await getSpotifyAccessToken();
+    const response = await fetch(`https://api.spotify.com/v1${pathname}`, {
+        headers: {
+            Authorization: `Bearer ${token}`
+        }
+    });
+
+    if (!response.ok) {
+        throw new Error(`Spotify API fallo (${response.status})`);
+    }
+
+    return response.json();
+}
+
+function buildArtists(track) {
+    return (track.artists || []).map(artist => artist.name).filter(Boolean).join(', ');
+}
+
+function formatDurationMs(ms) {
+    const totalSeconds = Math.max(0, Math.floor((ms || 0) / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = String(totalSeconds % 60).padStart(2, '0');
+    return `${minutes}:${seconds}`;
 }
 
 function trackToSong(track, requestedBy) {
+    const previewUrl = track.preview_url || track.previewURL || null;
+
     return {
-        title: track.name,
-        url: track.url,
-        duration: track.durationInSec || 0,
+        title: `${track.name}${buildArtists(track) ? ` - ${buildArtists(track)}` : ''}`,
+        url: previewUrl,
+        previewUrl,
+        duration: track.duration_ms || 30000,
         requestedBy
     };
 }
 
-async function searchSoundCloudTrack(query, requestedBy) {
-    const results = await play.search(query, { source: { soundcloud: 'tracks' }, limit: 1 });
-    const track = results?.[0];
+async function resolveSpotifySongs(url, requestedBy) {
+    const parsed = parseSpotifyUrl(url);
 
-    if (!track) {
-        throw new Error(`No encontre una coincidencia en SoundCloud para: ${query}`);
+    if (!parsed) {
+        throw new Error('Pasa un link valido de Spotify.');
     }
 
-    return trackToSong(track, requestedBy);
-}
+    if (parsed.type === 'track') {
+        const track = await spotifyApi(`/tracks/${parsed.id}`);
 
-async function resolveSoundCloudSongs(url, requestedBy) {
-    const sourceType = await play.validate(url);
+        if (!track.preview_url) {
+            throw new Error('Ese track de Spotify no tiene preview y no se puede reproducir.');
+        }
 
-    if (sourceType === 'so_track') {
-        const track = await play.soundcloud(url);
         return [trackToSong(track, requestedBy)];
     }
 
-    if (sourceType === 'so_playlist') {
-        const playlist = await play.soundcloud(url);
-        return playlist.tracks.map(track => trackToSong(track, requestedBy));
-    }
-
-    if (sourceType === 'sp_track') {
-        const track = await play.spotify(url);
-        return [await searchSoundCloudTrack(buildQueryFromTrack(track), requestedBy)];
-    }
-
-    if (sourceType === 'sp_playlist' || sourceType === 'sp_album') {
-        const collection = await play.spotify(url);
-        const tracks = collection.tracks || [];
+    if (parsed.type === 'playlist') {
         const songs = [];
+        let offset = 0;
 
-        for (const track of tracks.slice(0, 50)) {
-            const query = buildQueryFromTrack(track);
-            if (!query) continue;
+        while (true) {
+            const data = await spotifyApi(`/playlists/${parsed.id}/tracks?limit=100&offset=${offset}`);
 
-            try {
-                songs.push(await searchSoundCloudTrack(query, requestedBy));
-            } catch (error) {
-                console.warn(`No encontre coincidencia para "${query}":`, error.message);
+            for (const item of data.items || []) {
+                const track = item?.track;
+                if (!track || !track.preview_url) continue;
+                songs.push(trackToSong(track, requestedBy));
             }
+
+            if (!data.next) break;
+            offset += data.items?.length || 0;
         }
 
-        if (songs.length === 0) {
-            throw new Error('No pude convertir ese Spotify a una cancion reproducible.');
+        if (!songs.length) {
+            throw new Error('Esa playlist no tiene previews reproducibles.');
         }
 
         return songs;
     }
 
-    throw new Error('Pasa un link valido de Spotify o SoundCloud.');
+    if (parsed.type === 'album') {
+        const songs = [];
+        let offset = 0;
+
+        while (true) {
+            const data = await spotifyApi(`/albums/${parsed.id}/tracks?limit=50&offset=${offset}`);
+
+            for (const track of data.items || []) {
+                if (!track.preview_url) continue;
+                songs.push(trackToSong(track, requestedBy));
+            }
+
+            if (!data.next) break;
+            offset += data.items?.length || 0;
+        }
+
+        if (!songs.length) {
+            throw new Error('Ese album no tiene previews reproducibles.');
+        }
+
+        return songs;
+    }
+
+    throw new Error('Pasa un link valido de Spotify.');
 }
 
 async function playNext(guildId) {
@@ -252,7 +326,7 @@ async function playNext(guildId) {
 async function addSong(guild, url, requestedBy) {
     const queue = getQueue(guild.id);
 
-    const songs = await resolveSoundCloudSongs(url, requestedBy);
+    const songs = await resolveSpotifySongs(url, requestedBy);
     queue.songs.push(...songs);
 
     if (!queue.connection) {
@@ -267,15 +341,7 @@ async function addSong(guild, url, requestedBy) {
 }
 
 async function bootstrap() {
-    const soundcloudClientId = process.env.SC_CLIENT_ID || process.env.SOUNDCLOUD_CLIENT_ID || await play.getFreeClientID();
-
-    await play.setToken({
-        soundcloud: {
-            client_id: soundcloudClientId
-        }
-    });
-
-    client.once('ready', async () => {
+    client.once('clientReady', async () => {
         console.log(`Bot conectado como ${client.user.tag}`);
 
         const guild = await client.guilds.fetch(process.env.GUILD_ID).catch(() => null);
@@ -343,10 +409,10 @@ client.on('interactionCreate', async interaction => {
             const songs = await addSong(guild, url, interaction.user.tag);
 
             if (songs.length === 1) {
-                return interaction.editReply(`Agregada: **${songs[0].title}**`);
+                return interaction.editReply(`Agregada: **${songs[0].title}** (${formatDurationMs(songs[0].duration)} preview)`);
             }
 
-            return interaction.editReply(`Agregadas **${songs.length}** canciones de la playlist.`);
+            return interaction.editReply(`Agregadas **${songs.length}** canciones de Spotify con preview.`);
         }
 
         if (interaction.commandName === 'pause') {
