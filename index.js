@@ -22,6 +22,7 @@ if (ffmpegPath) {
 }
 
 const youtubeCookie = process.env.YOUTUBE_COOKIE || process.env.YT_COOKIE;
+console.log(`YouTube cookie loaded: ${youtubeCookie ? 'yes' : 'no'}`);
 
 const client = new Client({
     intents: [
@@ -152,6 +153,11 @@ async function getStreamWithRetry(url, attempts = 3) {
         }
     }
 
+    const message = String(lastError?.message || lastError || '');
+    if (message.toLowerCase().includes('confirmar que no eres un bot')) {
+        throw new Error('Falta configurar YOUTUBE_COOKIE en Railway o la cookie ya expiro.');
+    }
+
     throw lastError;
 }
 
@@ -211,6 +217,8 @@ async function bootstrap() {
                 cookie: youtubeCookie
             }
         });
+    } else {
+        console.warn('YOUTUBE_COOKIE no esta configurada. YouTube puede bloquear la reproduccion.');
     }
 
     client.once('ready', async () => {
