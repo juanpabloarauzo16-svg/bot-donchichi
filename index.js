@@ -1,6 +1,8 @@
 const { Client, GatewayIntentBits, ActivityType } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
 const play = require('play-dl');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const client = new Client({
@@ -18,6 +20,24 @@ let connection = null;
 player.on('error', error => {
     console.error('Error en el reproductor de audio:', error);
 });
+
+// Cargar cookies de YouTube si existen para evitar bloqueo de bots en Railway
+const cookiesPath = path.join(__dirname, 'cookies.txt');
+if (fs.existsSync(cookiesPath)) {
+    try {
+        const cookiesContent = fs.readFileSync(cookiesPath, 'utf8');
+        play.setToken({
+            youtube: {
+                cookie: cookiesContent.trim()
+            }
+        });
+        console.log("✅ Archivo cookies.txt cargado con éxito para play-dl.");
+    } catch (err) {
+        console.error("❌ Error al cargar cookies.txt:", err);
+    }
+} else {
+    console.log("⚠️ No se encontró cookies.txt. Las peticiones a YouTube en Railway podrían fallar con error de bot.");
+}
 
 // Usar clientReady en lugar de ready para evitar advertencias de deprecación
 client.once('clientReady', async () => {
@@ -145,7 +165,7 @@ client.on('interactionCreate', async interaction => {
             await interaction.editReply(`🎶 Reproduciendo: **${title}**`);
         } catch (error) {
             console.error('Error al intentar reproducir la canción:', error);
-            await interaction.editReply('❌ Hubo un error al intentar reproducir la canción.');
+            await interaction.editReply('❌ Hubo un error al intentar reproducir la canción: ' + error.message);
         }
     }
 
