@@ -19,7 +19,8 @@ player.on('error', error => {
     console.error('Error en el reproductor de audio:', error);
 });
 
-client.once('ready', async () => {
+// Usar clientReady en lugar de ready para evitar advertencias de deprecación
+client.once('clientReady', async () => {
     console.log(`Bot conectado como ${client.user.tag}`);
 
     // Configurar actividad del bot
@@ -31,17 +32,30 @@ client.once('ready', async () => {
     const channel = guild.channels.cache.get(process.env.VOICE_CHANNEL_ID);
     if (!channel) return console.log("Canal no encontrado");
 
-    // Unirse al canal de voz 24/7
-    connection = joinVoiceChannel({
-        channelId: channel.id,
-        guildId: guild.id,
-        adapterCreator: guild.voiceAdapterCreator,
-        selfDeaf: false
-    });
+    try {
+        // Unirse al canal de voz 24/7
+        connection = joinVoiceChannel({
+            channelId: channel.id,
+            guildId: guild.id,
+            adapterCreator: guild.voiceAdapterCreator,
+            selfDeaf: false
+        });
 
-    // Suscribir la conexión al reproductor de audio
-    connection.subscribe(player);
-    console.log("Conectado y suscrito al canal de voz 24/7");
+        // Registrar manejadores de estado y errores para la conexión de voz
+        connection.on('error', error => {
+            console.error("Error en la conexión de voz:", error);
+        });
+
+        connection.on('stateChange', (oldState, newState) => {
+            console.log(`Conexión de voz cambió de ${oldState.status} a ${newState.status}`);
+        });
+
+        // Suscribir la conexión al reproductor de audio
+        connection.subscribe(player);
+        console.log("Conectado y suscrito al canal de voz 24/7");
+    } catch (voiceError) {
+        console.error("Error al intentar conectarse al canal de voz inicial:", voiceError);
+    }
 
     // Registrar comandos de barra (Slash Commands) de forma global
     const commands = [
@@ -94,13 +108,15 @@ client.on('interactionCreate', async interaction => {
             let stream;
             let title = "";
 
-            // Validar si es una URL de YouTube
-            if (play.yt_validate(query) === 'video') {
+            // Validar de forma asíncrona la consulta usando play.validate
+            const validation = await play.validate(query);
+
+            if (validation === 'yt_video' || validation === 'yt_playlist') {
                 const videoInfo = await play.video_info(query);
                 title = videoInfo.video_details.title;
                 stream = await play.stream_from_info(videoInfo);
             } else {
-                // Si no es URL, buscar por término
+                // Si no es URL válida de YouTube, buscar por término
                 const searchResults = await play.search(query, { limit: 1 });
                 if (searchResults.length === 0) {
                     return interaction.editReply('❌ No se encontró ninguna canción con ese nombre.');
